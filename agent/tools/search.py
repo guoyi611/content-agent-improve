@@ -111,7 +111,11 @@ def search(keyword: str, max_results: int = 5) -> list[dict]:
         last_error: Exception | None = None
         for attempt in range(3):
             try:
-                response = _get_tavily_client().search(keyword, max_results=max_results)
+                search_kwargs = {
+                    "max_results": max_results,
+                    "include_raw_content": "markdown",
+                }
+                response = _get_tavily_client().search(keyword, **search_kwargs)
                 return response.get("results", [])
             except Exception as exc:
                 last_error = exc

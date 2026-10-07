@@ -17,7 +17,7 @@ AI 内容生产 Agent，基于 LangGraph + LangChain，输入主题自动生成�
 
 ```bash
 # API 服务
-uv run uvicorn api.server:app --reload --port 8917
+uv run uvicorn api.server:app --reload --port 8918
 
 # 前端（另一个终端）
 cd web && bun dev

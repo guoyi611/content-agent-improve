@@ -1,13 +1,10 @@
 import json
-import os
 import re
-from urllib.parse import quote
 
-import requests
-import trafilatura
 from langchain_core.messages import SystemMessage, HumanMessage
 from agent.state import AgentState
 from agent.tools.search import search
+from agent.tools.page_fetch import fetch_readable_text
 from agent.llm import get_llm
 
 
@@ -60,47 +57,27 @@ def _extract_keywords(state: AgentState) -> list[str]:
 
 
 def _full_page_text(url: str) -> str:
-    """Fetch and extract the readable body for an evidence URL.
-
-    CFP proxy first; direct fetch as fallback when proxy fails.
-    """
-    if not url or url.startswith(("javascript:", "data:")):
-        return ""
-    proxy = os.getenv("RESEARCH_PROXY_URL", "https://cfp.qdp.qzz.io/proxy").rstrip("/")
-    # Try CFP proxy first
-    try:
-        target = f"{proxy}/{quote(url, safe='')}"
-        response = requests.get(
-            target,
-            headers={"User-Agent": "Mozilla/5.0 (content-agent research)"},
-            timeout=(10, 60),
-        )
-        response.raise_for_status()
-        text = trafilatura.extract(response.text, include_links=True, include_tables=True)
-        if text and len(text) > 200:
-            return text.strip()
-    except Exception:
-        pass
-    # Direct fetch fallback
-    try:
-        response = requests.get(
-            url,
-            headers={"User-Agent": "Mozilla/5.0 (content-agent research)"},
-            timeout=(10, 60),
-        )
-        response.raise_for_status()
-        text = trafilatura.extract(response.text, include_links=True, include_tables=True)
-        return (text or "").strip()
-    except Exception as exc:  # noqa: BLE001 - search result remains valid on fetch failure
-        print(f"  [Researcher] 正文抓取失败，保留搜索摘要：{url} ({type(exc).__name__})")
-        return ""
+    """Compatibility wrapper for callers that only need the extracted text."""
+    return fetch_readable_text(url)[0]
 
 
 def _material_from_result(result: dict) -> str:
     url = str(result.get("url", "")).strip()
     snippet = str(result.get("content", "")).strip()
-    full_text = _full_page_text(url)
-    evidence = full_text[:18000] if full_text else snippet
+    raw_content = str(result.get("raw_content", "") or "").strip()
+    if len(raw_content) >= 200:
+        evidence = raw_content[:18000]
+    else:
+        full_text, fetch_error = fetch_readable_text(url) if url else ("", "")
+        if full_text:
+            evidence = full_text[:18000]
+        else:
+            evidence = snippet
+            if url and fetch_error:
+                print(
+                    f"  [Researcher] 正文抓取失败，保留搜索摘要："
+                    f"{url} ({fetch_error})"
+                )
     return (
         f"标题：{result.get('title', '无标题')}\n"
         f"内容：{evidence}\n"

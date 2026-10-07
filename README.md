@@ -214,7 +214,7 @@ LLM_MODEL=claude-sonnet-4-6
 | 配置项 | 说明 |
 |---|---|
 | `WECHAT_APP_ID` / `WECHAT_APP_SECRET` | 微信公众号 API，发布到草稿箱 |
-| `LANGCHAIN_API_KEY` | LangSmith 调试追踪 |
+| `LANGCHAIN_TRACING_V2` / `LANGCHAIN_API_KEY` | 可选的 LangSmith 调试追踪；不使用时保持 `false` 并留空 key |
 
 ### 4. 启动
 
@@ -224,7 +224,7 @@ LLM_MODEL=claude-sonnet-4-6
 
 ```bash
 # 终端 1 — Python API
-uv run uvicorn api.server:app --reload --port 8917
+uv run uvicorn api.server:app --reload --port 8918
 
 # 终端 2 — Next.js 前端
 cd web && bun dev
@@ -306,9 +306,9 @@ uv run run.py
 ## 调试
 
 ```bash
-# .env 中配置 LangSmith
+# 只有需要 LangSmith 调试追踪时才打开；CLI 生成文章不依赖它
 LANGCHAIN_TRACING_V2=true
-LANGCHAIN_API_KEY=你的key
+LANGCHAIN_API_KEY=lsv2_填写真实的ASCII key
 LANGCHAIN_PROJECT=content-agent
 ```
 

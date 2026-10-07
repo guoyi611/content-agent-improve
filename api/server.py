@@ -1,7 +1,7 @@
 """
 FastAPI 服务 —— SSE 流式生成 + 文章管理 CRUD + 微信发布
 
-启动方式：uv run uvicorn api.server:app --reload --port 8917
+启动方式：uv run uvicorn api.server:app --reload --port 8918
 """
 
 import os
@@ -31,9 +31,24 @@ from agent.tools.screenshot import SCREENSHOT_ENGINE_VERSION
 
 app = FastAPI(title="Content Agent API")
 
+# The browser normally reaches the API from the local Next.js dev server.
+# Keep the defaults explicit, while allowing a custom frontend origin for
+# deployments that do not use the bundled development ports.
+_cors_origins = {
+    "http://localhost:3917",
+    "http://127.0.0.1:3917",
+    "http://[::1]:3917",
+}
+_cors_origins.update(
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "").split(",")
+    if origin.strip()
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3917"],
+    allow_origins=sorted(_cors_origins),
+    allow_origin_regex=r"https?://(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
