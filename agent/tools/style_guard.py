@@ -116,7 +116,7 @@ def strip_translationese(draft: str) -> tuple[str, int]:
         return draft, 0
 
     try:
-        res = get_llm().invoke(
+        res = get_llm("writer").invoke(
             [
                 SystemMessage(content=REWRITE_SYSTEM),
                 HumanMessage(content=draft),

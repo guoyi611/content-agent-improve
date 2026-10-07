@@ -41,7 +41,7 @@ agent/
                                           image_fetcher → save_memory → END
   prompts/templates.py   # 平台 Prompt 模板 + 方向预设
   publish/               # 微信发布（MD→HTML、API、封面）
-  tools/                 # 搜索、生图、截图、Unsplash
+  tools/                 # 搜索、生图、截图、Unsplash、翻译腔清洗
 api/server.py            # FastAPI 路由
 web/                     # Next.js 前端
 ```
@@ -63,6 +63,7 @@ Writer 在初稿中插入占位符，ImageFetcher 节点替换为真实图片。
 
 - 配置优先级：环境变量 > SQLite settings 表 > 默认值
 - LLM 实例通过 `@lru_cache` 缓存，配置变更需重启
+- 节点可单独配模型：`get_llm("writer")` 优先读 `WRITER_LLM_*`，缺项逐级回退到 `LLM_*`；writer 与翻译腔清洗共用这一份配置
 - 前端设置修改写入 SQLite，无需重启即生效（热更新）
 - 图片保存到 `data/images/`，通过 `/api/images/{filename}` 访问
 - SSE 流式事件格式：`{node, data, active}`，`active` 字段标记当前执行节点

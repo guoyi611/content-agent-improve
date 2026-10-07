@@ -56,7 +56,7 @@ def writer_node(state: AgentState) -> dict:
         chunks: list[str] = []
         started = _time.monotonic()
         last_content = started
-        for chunk in get_llm().stream([HumanMessage(content=prompt)]):
+        for chunk in get_llm("writer").stream([HumanMessage(content=prompt)]):
             now = _time.monotonic()
             if now - started > w_total:
                 raise _StreamWatchdog(
@@ -76,11 +76,11 @@ def writer_node(state: AgentState) -> dict:
         # 中间链路静默断链（连接看似 ESTABLISHED 但字节永不到达）。流式让
         # 字节持续流动，避免僵尸连接；聚合结果与 invoke 等价。
         text = _stream_with_deadline()
-        draft = text.strip() if text else get_llm().invoke([HumanMessage(content=prompt)]).content.strip()
+        draft = text.strip() if text else get_llm("writer").invoke([HumanMessage(content=prompt)]).content.strip()
     except TypeError as e:
         if "null value for 'choices'" in str(e):
             print("  ⚠️ LLM 返回空响应（可能触发内容审核），正在重试...")
-            res = get_llm().invoke([HumanMessage(content=prompt)])
+            res = get_llm("writer").invoke([HumanMessage(content=prompt)])
             draft = res.content.strip()
         else:
             raise
@@ -88,12 +88,12 @@ def writer_node(state: AgentState) -> dict:
         # 看门狗触发说明流已挂死（有 SSE 心跳但无正文）。invoke 走非流式路径，
         # 由网关直接返回完整结果，绕开卡死的流式链路。
         print(f"  ⚠️ {wd}，回退到 invoke 重试一次...")
-        res = get_llm().invoke([HumanMessage(content=prompt)])
+        res = get_llm("writer").invoke([HumanMessage(content=prompt)])
         draft = res.content.strip()
     except TypeError as e:
         if "null value for 'choices'" in str(e):
             print("  ⚠️ LLM 返回空响应（可能触发内容审核），正在重试...")
-            res = get_llm().invoke([HumanMessage(content=prompt)])
+            res = get_llm("writer").invoke([HumanMessage(content=prompt)])
             draft = res.content.strip()
         else:
             raise
@@ -108,7 +108,7 @@ def writer_node(state: AgentState) -> dict:
         if isinstance(stream_exc, (APIError, APIConnectionError)):
             err_name = type(stream_exc).__name__
             print(f"  ⚠️ 流式中断（{err_name}），回退到 invoke 重试一次...")
-            res = get_llm().invoke([HumanMessage(content=prompt)])
+            res = get_llm("writer").invoke([HumanMessage(content=prompt)])
             draft = res.content.strip()
         else:
             raise
@@ -124,7 +124,7 @@ def writer_node(state: AgentState) -> dict:
                 "[SCREENSHOT: URL, 中文描述] 候选（最终只保留成功且去重后的 5 到 9 张）。"
                 "每个 URL 必须不同，图片必须对应具体段落。"
             )
-            res = get_llm().invoke([HumanMessage(content=prompt + count_prompt)])
+            res = get_llm("writer").invoke([HumanMessage(content=prompt + count_prompt)])
             draft = res.content.strip()
 
     # 消除翻译腔句式：prompt 层面的禁令压不住模型的语言惯性，

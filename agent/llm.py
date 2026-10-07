@@ -26,39 +26,59 @@ from langchain_core.language_models import BaseChatModel
 from agent.config import get_config
 
 
-@lru_cache(maxsize=4)
-def get_llm() -> BaseChatModel:
+@lru_cache(maxsize=8)
+def get_llm(role: str = "default") -> BaseChatModel:
     """
     根据配置返回 LLM 实例（优先级：env > SQLite > 默认值）。
-    结果会被缓存（只创建一次）。
+    结果按 role 缓存。
+
+    role="default" 读 LLM_* 配置；其他角色（如 "writer"）先读
+    <ROLE>_LLM_*，缺哪一项就回退到 LLM_* 的同名配置——这样可以只给某个
+    节点换模型，其余节点不受影响。
     """
-    provider = get_config("LLM_PROVIDER", "openai").lower()
-    api_key  = get_config("LLM_API_KEY")
-    model    = get_config("LLM_MODEL", "gpt-4o-mini")
-    reasoning_effort = get_config("LLM_REASONING_EFFORT")
+    prefix = "LLM" if role == "default" else f"{role.upper()}_LLM"
+    label = "LLM" if role == "default" else f"LLM:{role}"
+
+    provider = (
+        get_config(f"{prefix}_PROVIDER") or get_config("LLM_PROVIDER", "openai")
+    ).lower()
+    api_key = get_config(f"{prefix}_API_KEY") or get_config("LLM_API_KEY")
+    model = get_config(f"{prefix}_MODEL") or get_config("LLM_MODEL", "gpt-4o-mini")
+    base_url = get_config(f"{prefix}_BASE_URL") or get_config("LLM_BASE_URL")
+    reasoning_effort = (
+        get_config(f"{prefix}_REASONING_EFFORT") or get_config("LLM_REASONING_EFFORT")
+    )
 
     if not api_key:
-        raise ValueError("未设置 LLM_API_KEY，请在设置中填写")
+        raise ValueError(f"未设置 {prefix}_API_KEY 或 LLM_API_KEY，请在设置中填写")
 
     if provider == "anthropic":
-        return _make_anthropic(api_key, model)
+        return _make_anthropic(api_key, model, label)
     elif provider == "openai":
-        return _make_openai(api_key, model, reasoning_effort)
+        return _make_openai(api_key, model, base_url, reasoning_effort, label)
     else:
         raise ValueError(
-            f"不支持的 LLM_PROVIDER: '{provider}'，"
+            f"不支持的 {prefix}_PROVIDER: '{provider}'，"
             "请设置为 'openai' 或 'anthropic'"
         )
 
 
-def _make_openai(api_key: str, model: str, reasoning_effort: str | None = None) -> BaseChatModel:
+def _make_openai(
+    api_key: str,
+    model: str,
+    base_url: str | None = None,
+    reasoning_effort: str | None = None,
+    label: str = "LLM",
+) -> BaseChatModel:
     """
     创建兼容 OpenAI 规范的 LLM。
     Kimi、DeepSeek、通义、硅基流动等只需改 base_url 和 model 即可。
+
+    base_url 由 get_llm 按 role 解析后传入，这里不再回读通用配置——
+    否则 writer 配了独立端点时，下面的 extra_body 分支会看错来源。
     """
     from langchain_openai import ChatOpenAI
 
-    base_url = get_config("LLM_BASE_URL")  # 不填则使用 OpenAI 默认地址
     # Relay providers can take several minutes to return a long reasoning
     # response. The previous 120-second request timeout converted a slow but
     # healthy response into LangChain's generic APIConnectionError. Keep the
@@ -97,7 +117,7 @@ def _make_openai(api_key: str, model: str, reasoning_effort: str | None = None) 
     # 408 拒绝。请求体里的 timeout 字段可覆盖该默认（litellm proxy 读取
     # body 级 timeout），因此把读超时同样传给网关，让单次 attempt 的
     # 预算与客户端读超时一致。
-    if get_config("LLM_BASE_URL"):
+    if base_url:
         kwargs["extra_body"] = {"timeout": read_timeout}
         # Qwen3 系部署默认开思考模式：首字节前先烧 30-90s reasoning token，
         # 6000+ 字长文生成总时长轻松破 600s 读超时，流式心跳等不到正文
@@ -110,15 +130,15 @@ def _make_openai(api_key: str, model: str, reasoning_effort: str | None = None) 
         # .invoke() 也走 SSE 聚合，与 .stream() 同路径。
         kwargs["streaming"] = True
 
-    print(f"  [LLM] OpenAI 规范 | model={model} | base_url={base_url or '(default)'}")
+    print(f"  [{label}] OpenAI 规范 | model={model} | base_url={base_url or '(default)'}")
     return ChatOpenAI(**kwargs)
 
 
-def _make_anthropic(api_key: str, model: str) -> BaseChatModel:
+def _make_anthropic(api_key: str, model: str, label: str = "LLM") -> BaseChatModel:
     """创建原生 Anthropic LLM。"""
     from langchain_anthropic import ChatAnthropic
 
-    print(f"  [LLM] Anthropic 规范 | model={model}")
+    print(f"  [{label}] Anthropic 规范 | model={model}")
     return ChatAnthropic(
         api_key=api_key,
         model_name=model,
