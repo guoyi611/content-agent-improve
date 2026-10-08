@@ -381,15 +381,20 @@ def take_screenshot(
                 "SCREENSHOT_CHROME_EXE",
                 "/ms-playwright/chromium-1208/chrome-linux64/chrome",
             )
-            browser = p.chromium.launch(
+            launch_kwargs = dict(
                 headless=True,
-                executable_path=chrome_exe,
                 args=[
                     "--no-sandbox",
                     "--disable-gpu",
                     "--disable-dev-shm-usage",
                 ],
             )
+            # 上面那个默认路径只存在于容器镜像里。本机（Windows/macOS）照搬
+            # 它只会得到 "executable doesn't exist"——路径不存在就让 playwright
+            # 自己解析，或者用 SCREENSHOT_CHROME_EXE 显式指定。
+            if os.path.exists(chrome_exe):
+                launch_kwargs["executable_path"] = chrome_exe
+            browser = p.chromium.launch(**launch_kwargs)
             context = browser.new_context()
             if proxy_key:
                 # Auth the reverse-proxy request once per browser context. The

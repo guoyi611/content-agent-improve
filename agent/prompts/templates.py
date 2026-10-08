@@ -224,24 +224,13 @@ IMAGE_INSTRUCTION = """- 插图：在每个 ## 段落开始前，单独一行写
   ✗ [IMAGE: performance comparison]（没有画面）
   ✓ [IMAGE: A futuristic digital illustration showing a glowing Chinese dragon made of circuit board patterns and code streams, coiling around a large glowing "5.1" number. Blue and gold light emanating outward. Color palette: deep navy (#0A1628), electric blue (#1A73E8), gold (#FFD600). Style: flat vector with cinematic lighting, 16:9]"""
 
-SCREENSHOT_INSTRUCTION = """- 插图：在与图片对应的论点或功能说明前，单独一行写 [SCREENSHOT: 官方网址, 中文描述]
-  截图目标必须是与本段内容直接相关的官网功能子页、官方文档页、产品演示页或结果页面。
-  优先截取能体现具体功能、操作步骤、设置界面、数据结果或实际效果的区域，不要使用泛泛的品牌宣传图。
-  ⚠️ 铁律：URL 必须来自「素材摘要」中明确列出的网址或你在素材中见过的页面，禁止凭记忆虚构任何 URL。
-  产品型号页、规格页（如 /specs/、/kirin-xxx/）如果素材中没有出现，一律不要编造——编造的 URL 会 404 导致截图失败。
-  如果素材中的 URL 不足 12 个，宁可少列，并优先使用素材中出现的每个不同页面。
-  图片应放在解释该功能或效果的段落附近；中文描述要说明图片具体展示的内容。
-  请安排**12 张不同的截图候选**，为网页限流、验证或加载失败预留余量；最终文章只会保留成功且去重后的 5 到 9 张。
-  每张截图必须使用不同的页面 URL，禁止在文章中重复使用同一张截图。
-  优先级：① 素材摘要中列出的真实 URL ② 官方文档/发布说明/功能子页面 ③ 官方示例或结果页面。禁止官网主页和产品落地页。
-  避免使用经常触发验证或限流的聚合站、模型社区、API JSON 页面；优先选择同一官方站点内不同的稳定文档子页。
-  同一页面的查询参数、锚点或动态横幅变化仍算同一张图，禁止用来凑数。
-  ✗ [SCREENSHOT: https://google.com, 搜索结果]（不是官方页面）
-  ✗ [SCREENSHOT: https://www.google.com.hk/, Google 香港首页]（区域首页/搜索页，无模型内容）
-  ✗ [SCREENSHOT: https://www.google.cn/, Google 中国首页]（同上，禁一切 google 区域首页变体）
-  ✗ [SCREENSHOT: https://consumer.huawei.com/cn/phones/mate-60-pro/specs/, 规格页]（素材中没出现，编造的 URL）
-  ✓ [SCREENSHOT: https://platform.openai.com/docs/guides/text, 官方文本功能文档]
-  ✓ [SCREENSHOT: https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/overview, 官方提示工程文档]"""
+SCREENSHOT_INSTRUCTION = """- 插图：在需要展示产品界面、官方文档或实际效果的论点前，单独一行写 [SCREENSHOT: 官方网址, 中文描述]
+  截图要服务于它上方那一段的论证，中文描述写清这张图具体展示什么。
+  URL 只能取自「素材摘要」中列出的页面，禁止凭记忆编造——编造的 URL 会 404 导致截图失败。
+  素材里没有与段落对应的页面时，这一段就不插图。图片数量由内容需要决定，不要为了凑数硬配。
+  不要官网首页、搜索结果页、聚合站；优先官方文档页、功能子页、结果页。
+  同一个页面只用一次。
+  ✓ [SCREENSHOT: https://platform.openai.com/docs/guides/text, 官方文本功能文档]"""
 
 MIXED_INSTRUCTION = """- 插图方式一（截图）：在需要展示**产品界面、官方页面、实际效果**的段落前，单独一行写 [SCREENSHOT: 官方网址, 中文描述]
   截图目标必须是与本段内容直接相关的官方网站、产品页面、文档页面。

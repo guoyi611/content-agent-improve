@@ -17,11 +17,6 @@ def _get_image_mode() -> str:
     return "image"
 
 
-def _screenshot_url_count(draft: str) -> int:
-    urls = re.findall(r"\[SCREENSHOT:\s*([^\],]+)", draft)
-    return len({url.strip().rstrip("/").lower() for url in urls})
-
-
 def writer_node(state: AgentState) -> dict:
     """
     根据平台 Prompt 模板和素材生成初稿。
@@ -113,19 +108,10 @@ def writer_node(state: AgentState) -> dict:
         else:
             raise
 
-    if image_mode == "screenshot":
-        for _ in range(2):
-            count = _screenshot_url_count(draft)
-            if count >= 12:
-                break
-            count_prompt = (
-                f"\n\n【截图数量修订】当前草稿有 {count} 个不同截图 URL。"
-                "请完整重写文章，严格保留原有内容要求。为提高网页失败时的成功率，请输出 12 个不同的 "
-                "[SCREENSHOT: URL, 中文描述] 候选（最终只保留成功且去重后的 5 到 9 张）。"
-                "每个 URL 必须不同，图片必须对应具体段落。"
-            )
-            res = get_llm("writer").invoke([HumanMessage(content=prompt + count_prompt)])
-            draft = res.content.strip()
+    # 截图数量不再强制。此前是"不足 12 张就完整重写全文"，结果是 writer 为了
+    # 凑数牺牲正文（文章明显变短），并硬配与论点无关的页面（图不对应）。现在改
+    # 由 SCREENSHOT_INSTRUCTION 要求"有对应页面才插图"，数量随内容需要决定；
+    # 截图失败的部分由 image_fetcher 自动从正文移除，本就不需要预留候选。
 
     # 消除翻译腔句式：prompt 层面的禁令压不住模型的语言惯性，
     # 这里在交付 critic 之前做一次确定性检测 + 局部重写，只动命中的行。
