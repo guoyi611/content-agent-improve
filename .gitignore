@@ -20,4 +20,5 @@ output_*
 data/
 
 .next
-/AGENTS.local.md
+*.local.md
+
