@@ -473,6 +473,10 @@ def generate_image(
         GeneratedImage 或 None（失败时）
     """
     provider = provider or get_config("IMAGE_PROVIDER") or _detect_provider()
+    # "mixed" 是 writer 决策模式（writer 自己选截图/生图），不是实际生图后端。
+    # mixed 模式下 [IMAGE: ...] 占位符需要自动检测具体后端。
+    if provider == "mixed":
+        provider = _detect_provider()
     if not provider or provider not in _PROVIDERS:
         print(f"  [ImageGen] 不支持的 provider: {provider}")
         return None

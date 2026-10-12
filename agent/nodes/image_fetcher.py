@@ -365,6 +365,10 @@ def image_fetcher_node(state: AgentState) -> dict:
             else:
                 fetch_fn = _fetch_ai_with_unsplash_fallback
                 provider = get_config("IMAGE_PROVIDER") or "auto"
+                # mixed 是 writer 决策模式，print 显示真实解析到的后端
+                if provider == "mixed":
+                    from agent.tools.image_gen import _detect_provider
+                    provider = _detect_provider() or "auto"
                 style_label = STYLE_PRESETS.get(style or "", {}).get("label", style or "auto")
                 print(f"  图片来源：AI 生图 (provider={provider}, style={style_label})")
 
