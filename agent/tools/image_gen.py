@@ -364,7 +364,11 @@ def _generate_dashscope(prompt: str, model: str | None = None) -> str | None:
     """通义万相 qwen-image 生图"""
     cfg_key, cfg_url, cfg_model = _get_image_config()
     api_key = cfg_key or get_config("DASHSCOPE_API_KEY")
-    base_url = cfg_url or "https://dashscope.aliyuncs.com"
+    # cfg_url 可能配成 https://dashscope.aliyuncs.com 或 https://dashscope.aliyuncs.com/api/v1
+    # 服务端真实路径是 /api/v1/services/...，剥掉重复的 /api/v1 后缀再拼
+    base_url = (cfg_url or "https://dashscope.aliyuncs.com").rstrip("/")
+    if base_url.endswith("/api/v1"):
+        base_url = base_url[: -len("/api/v1")]
     model = model or cfg_model or "qwen-image-2.0-pro"
 
     if not api_key:
@@ -437,15 +441,25 @@ _PROVIDERS: dict[str, callable] = {
 
 
 def _detect_provider() -> str | None:
-    """根据已配置的 IMAGE_API_KEY 自动检测可用的 provider"""
+    """
+    根据 IMAGE_BASE_URL / IMAGE_API_KEY 自动检测可用的 provider。
+    端点决定 protocol —— 优先看 IMAGE_BASE_URL 决定走哪个 provider。
+    """
+    base_url = (get_config("IMAGE_BASE_URL") or get_config("LLM_BASE_URL") or "").lower()
+    if "dashscope" in base_url:
+        return "dashscope"
+    if "openrouter" in base_url:
+        return "openrouter"
+    if "generativelanguage.googleapis" in base_url:
+        return "gemini"
+    if "api.replicate" in base_url or "replicate.com" in base_url:
+        return "replicate"
+    # 端点未指定 → 用 key 兜底
     if get_config("IMAGE_API_KEY"):
         return "openai"
     if get_config("REPLICATE_API_TOKEN"):
         return "replicate"
     if get_config("DASHSCOPE_API_KEY"):
-        return "dashscope"
-    base_url = get_config("LLM_BASE_URL")
-    if "dashscope" in base_url:
         return "dashscope"
     if get_config("LLM_API_KEY"):
         return "openai"
