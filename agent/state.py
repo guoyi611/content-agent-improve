@@ -20,7 +20,8 @@ class AgentState(TypedDict):
     topic: str                   # 用户输入的主题
     platform: Platform           # 目标平台
     direction: str               # 内容方向（预设 key 或自定义描述）
-    outline: str                 # Planner 规划的文章大纲（角度、框架、要点）
+    outline: str                 # Planner 规划的文章大纲（角度、框架、要点、视觉叙事线）
+    article_type: NotRequired[Literal["consulting", "creative"]]  # Planner 分类：咨询类（评测/对比/指南，默认）/ 创造类（观点/叙事/概念）。决定 writer prompt 分支与 image_fetcher provider 路由
     keywords: list[str]          # Planner 拆解的搜索关键词
     raw_materials: list[str]     # 搜索到的原始素材（每条一个字符串）
     context: str                 # 整理后的素材摘要（喂给 Writer）
