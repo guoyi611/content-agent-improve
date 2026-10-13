@@ -8,6 +8,113 @@ import re
 
 _SCREENSHOT_PLACEHOLDER = re.compile(r"^\[SCREENSHOT:\s*(\S+?)\s*,", re.M)
 
+# narrative_design 改动 2：解析占位符 + 元数据
+# 按 kind 分流：IMAGE 整体吞下 prompt 内容（hex 色值常带逗号，不能按 ", " 拆）；
+# SCREENSHOT 按 "URL, 中文描述" 切分（固定两段）。
+_IMAGE_RE = re.compile(r"^\[IMAGE:\s*(.+?)\]\s*$", re.M)
+_SCREENSHOT_FULL_RE = re.compile(
+    r"^\[SCREENSHOT:\s*(\S+?)\s*,\s*(.+?)\]\s*$", re.M
+)
+_SCREENSHOT_FALLBACK_RE = re.compile(r"^\[SCREENSHOT:\s*(\S+?)\s*\]?\s*$", re.M)
+_PLACEHOLDER_ANY_RE = re.compile(
+    r"^\[(IMAGE|SCREENSHOT):", re.M
+)
+_HEADING_RE = re.compile(r"(?m)^##\s+.+$")
+_ROLE_NOTE_RE = re.compile(
+    r"\(\s*role\s*:\s*(\w+)\s*(?:;\s*reason\s*:\s*(.+?))?\s*\)"
+)
+_VALID_ROLES = {"hero", "evidence", "contrast", "transition", "decorative"}
+
+
+def _extract_image_placeholders(draft: str) -> list[dict]:
+    """解析 draft 中所有 IMAGE / SCREENSHOT 占位符的逐项元数据（narrative_design 改动 2）。
+
+    字段见 AgentState.image_placeholders 注释。
+    解析失败（正则不匹配）→ 字段为空列表，下游按"无元数据"降级。
+
+    按 kind 分流匹配：
+      IMAGE       → [IMAGE: <prompt 整段>]         prompt 内可能含 ","（hex 色值）
+      SCREENSHOT  → [SCREENSHOT: <url>, <描述>]    固定两段，按 ", " 拆
+    """
+    if not draft:
+        return []
+
+    headings = [(m.start(), m.group(0).strip()) for m in _HEADING_RE.finditer(draft)]
+    out: list[dict] = []
+
+    for line_m in _PLACEHOLDER_ANY_RE.finditer(draft):
+        line_start = line_m.start()
+        # 占位符占整行；从 line_start 读至行尾（或 draft 末尾）
+        line_end = draft.find("\n", line_start)
+        if line_end < 0:
+            line_end = len(draft)
+        line_text = draft[line_start:line_end]
+
+        kind_token = line_m.group(1).lower()
+        kind = "image" if kind_token == "image" else "screenshot"
+        caption: str | None = None
+
+        if kind == "image":
+            # IMAGE 整段吞下（避免 prompt 内的 "," 被误切为 caption）
+            m = _IMAGE_RE.match(line_text)
+            if not m:
+                # 格式异常（如括号未闭合）→ 跳过该占位符，避免污染下游
+                continue
+        else:
+            m = _SCREENSHOT_FULL_RE.match(line_text)
+            if m:
+                caption = m.group(2).strip()
+            else:
+                # 退化：URL 后无描述
+                fb = _SCREENSHOT_FALLBACK_RE.match(line_text)
+                if not fb:
+                    continue
+
+        # 找 line_start 之前最近的 heading
+        heading: str | None = None
+        heading_offset = -1
+        for h_offset, h_text in headings:
+            if h_offset <= line_start:
+                heading_offset = h_offset
+                heading = h_text
+            else:
+                break
+
+        # paragraph_index：在该 heading 段内占位符前有几个空行分段（粗略）
+        para_idx = 0
+        if heading_offset >= 0:
+            section = draft[heading_offset:line_start]
+            para_idx = section.count("\n\n")
+
+        # 占位符下一行的 (role: <r>; reason: <text>) 自注（LLM 可选输出）
+        role, reason = "unassigned", ""
+        nxt_start = line_end + 1
+        nxt_end = draft.find("\n", nxt_start)
+        if nxt_end < 0:
+            nxt_end = len(draft)
+        if nxt_start < len(draft):
+            nxt_line = draft[nxt_start:nxt_end].strip()
+            note_m = _ROLE_NOTE_RE.search(nxt_line)
+            if note_m:
+                r = note_m.group(1).lower()
+                role = r if r in _VALID_ROLES else "unassigned"
+                reason = (note_m.group(2) or "").strip()
+
+        out.append(
+            {
+                "placeholder": line_text,
+                "kind": kind,
+                "heading": heading,
+                "paragraph_index": para_idx,
+                "char_offset": line_start,
+                "role": role,
+                "reason": reason,
+                "caption": caption,
+            }
+        )
+
+    return out
+
 
 def _drop_unanchored_screenshots(draft: str) -> tuple[str, int]:
     """删除不被正文引用自证的截图占位符。
@@ -160,6 +267,11 @@ def writer_node(state: AgentState) -> dict:
     # 由 SCREENSHOT_INSTRUCTION 要求"有对应页面才插图"，数量随内容需要决定；
     # 截图失败的部分由 image_fetcher 自动从正文移除，本就不需要预留候选。
 
+    # narrative_design 改动 2：解析占位符元数据（heading / paragraph_index / role / reason）
+    # —— 设计要求在 _drop_unanchored_screenshots 之前完成，让元数据包含 writer 实际
+    # 输出的全部占位符（含未锚定的）；下游 refiller / critic 按需过滤。
+    image_placeholders = _extract_image_placeholders(draft)
+
     # 截图锚定的确定性执法：prompt 只能约束大概率，writer 手头真引用不够时
     # 仍会拿无关页面凑数。一张截图要保留，唯一条件是它的 URL 出现在
     # 占位符之外的正文里（即被当作证据引用过）；位置不限。
@@ -187,6 +299,7 @@ def writer_node(state: AgentState) -> dict:
 
     return {
         "draft": draft,
+        "image_placeholders": image_placeholders,
         "log": state.get("log", []) + [
             f"✍️ {state['platform']} 初稿完成（{len(draft)}字）"
         ],
