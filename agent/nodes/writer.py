@@ -37,14 +37,27 @@ def _drop_unanchored_screenshots(draft: str) -> tuple[str, int]:
     return "\n".join(keep), dropped
 
 
-def _get_image_mode() -> str:
-    """根据 IMAGE_PROVIDER 配置决定插图模式"""
+def _get_image_mode_from_provider() -> str:
+    """根据 IMAGE_PROVIDER 配置决定插图模式（仅作为 article_type 缺省时的降级路径）"""
     provider = get_config("IMAGE_PROVIDER").lower()
     if provider == "screenshot":
         return "screenshot"
     if provider == "mixed":
         return "mixed"
     return "image"
+
+
+def _resolve_image_mode(state: AgentState) -> str:
+    """按 narrative_design 改动 1 的路由决定插图模式。planner 输出的 article_type
+    决定主路径；缺省时降级到 IMAGE_PROVIDER 旧 image_mode（老文章兼容）。"""
+    article_type = state.get("article_type")
+    if article_type in ("consulting", "creative"):
+        has_citations = bool(state.get("screenshot_source_urls"))
+        if article_type == "consulting":
+            return "screenshot"
+        return "mixed" if has_citations else "image"
+    # 兜底：article_type 缺失（planner 旧版本 / 解析失败）
+    return _get_image_mode_from_provider()
 
 
 def writer_node(state: AgentState) -> dict:
@@ -55,7 +68,9 @@ def writer_node(state: AgentState) -> dict:
     """
     print(f"\n[Writer] 开始写作（平台：{state['platform']}）...")
 
-    image_mode = _get_image_mode()
+    article_type = state.get("article_type")
+    has_citations = bool(state.get("screenshot_source_urls"))
+    image_mode = _resolve_image_mode(state)
     prompt = build_prompt(
         platform=state["platform"],
         topic=state["topic"],
@@ -64,6 +79,8 @@ def writer_node(state: AgentState) -> dict:
         outline=state.get("outline", ""),
         image_mode=image_mode,
         critic_feedback=state.get("critic_feedback", ""),
+        article_type=article_type,
+        has_citations=has_citations,
     )
     # 应用层超时（对抗"活流挂死"）：httpx 的 read timeout 只在 socket 层无字节时
     # 触发，而网关/上游在卡死时仍持续发 SSE 心跳字节，socket 永远有数据 →

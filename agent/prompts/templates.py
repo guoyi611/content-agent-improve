@@ -216,7 +216,9 @@ PLATFORM_PROMPTS: dict[str, str] = {
 }
 
 
-# ── 插图模式说明（根据 IMAGE_PROVIDER 注入）──────────────
+# ── 插图模式说明（按 article_type 路由；fallback_mode 仅在 article_type 缺省时使用）────
+# 路由：consulting → SCREENSHOT；creative + 有引用 → MIXED；creative + 无引用 → IMAGE。
+# IMAGE_PROVIDER 全局配置退化为 image_fetcher 的生图后端选择器（unsplash/openai/gemini/prompt）。
 IMAGE_INSTRUCTION = """- 插图：在每个 ## 段落开始前，单独一行写 [IMAGE: 详细的英文绘图提示词]
   提示词必须包含：① 具体的视觉隐喻（与本段内容强关联）② 色彩方案（含 hex 色值）③ 渲染风格
   可以包含文字标注、品牌视觉元素（logo 轮廓、品牌色）、数据可视化。
@@ -258,25 +260,57 @@ def get_direction_text(direction: str) -> str:
     return f"你是一位专业的内容创作者。你的写作方向是：{direction}"
 
 
-def _get_image_instruction(image_mode: str) -> str:
-    """根据配图模式返回对应的插图说明"""
-    if image_mode == "screenshot":
+def _get_image_instruction(
+    article_type: str | None = None,
+    has_citations: bool = False,
+    fallback_mode: str | None = None,
+) -> str:
+    """按文章类型路由选题说明（narrative_design 改动 1）。
+
+    主路径（planner 输出的新文章）：
+      consulting              → SCREENSHOT_INSTRUCTION
+      creative + 有引用页     → MIXED_INSTRUCTION
+      creative + 无引用       → IMAGE_INSTRUCTION
+
+    降级路径（article_type 缺省 / 解析失败的老文章）：
+      复用旧 image_mode 三分支（screenshot / mixed / image），由 writer.py
+      从 IMAGE_PROVIDER 推断并传 fallback_mode —— 行为与改动前一致。
+    """
+    if article_type == "consulting":
         return SCREENSHOT_INSTRUCTION
-    elif image_mode == "mixed":
+    if article_type == "creative":
+        return MIXED_INSTRUCTION if has_citations else IMAGE_INSTRUCTION
+    # 兜底：article_type 缺失（老 state / planner 未落地版本）
+    if fallback_mode == "screenshot":
+        return SCREENSHOT_INSTRUCTION
+    if fallback_mode == "mixed":
         return MIXED_INSTRUCTION
-    else:
-        return IMAGE_INSTRUCTION
+    return IMAGE_INSTRUCTION
 
 
-def build_prompt(platform: Platform, topic: str, context: str, direction: str = "", outline: str = "", image_mode: str = "image", critic_feedback: str = "") -> str:
+def build_prompt(
+    platform: Platform,
+    topic: str,
+    context: str,
+    direction: str = "",
+    outline: str = "",
+    image_mode: str = "image",
+    critic_feedback: str = "",
+    article_type: str | None = None,
+    has_citations: bool = False,
+) -> str:
     """用实际内容替换模板中的占位符"""
     if not direction:
         direction = DEFAULT_DIRECTION
     direction_text = get_direction_text(direction)
     template = PLATFORM_PROMPTS[platform]
 
-    # 替换插图说明
-    image_instruction = _get_image_instruction(image_mode)
+    # 替换插图说明：article_type 优先；缺省时按 image_mode 降级
+    image_instruction = _get_image_instruction(
+        article_type=article_type,
+        has_citations=has_citations,
+        fallback_mode=image_mode if article_type is None else None,
+    )
     template = template.replace("{image_instructions}", image_instruction)
 
     # Post-processing, publishing and credential instructions are handled by
