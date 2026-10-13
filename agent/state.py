@@ -35,7 +35,7 @@ class AgentState(TypedDict):
     final_article: str           # 替换图片占位符后的最终文章
     log: list[str]               # 运行日志，供前端侧边栏展示
     history_context: str         # 从向量库检索到的历史素材
-    critic_score: int            # Critic 评分（1~10）
+    critic_score: float          # Critic 评分（1~10；narrative_design 改动 3 起支持 0.5 颗粒：LLM 4 项 9 分制 + 代码算图文一致性 1 分 = 10 分制；pass ≥ 7.5）
     critic_feedback: str         # Critic 修改建议
     retry_action: NotRequired[str]  # 重试路由：rewrite=直接重写 / research=补搜后重写
     retry_count: int             # 重写次数（最多 2 次）

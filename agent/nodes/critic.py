@@ -4,7 +4,10 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from agent.state import AgentState
 from agent.llm import get_llm
 from agent.prompts.templates import WRITING_PRINCIPLES
-from agent.tools.critic_guard import apply_caps, sanitize_retry_action, validate_violations
+from agent.tools.critic_guard import (
+    apply_caps, sanitize_retry_action, validate_violations,
+    compute_image_alignment_score,
+)
 
 
 def _title_evidence_violation(topic: str, context: str, draft: str) -> str:
@@ -29,12 +32,20 @@ CRITIC_SYSTEM = """你是一位资深内容编辑，负责评估文章质量并�
 - 反过来，"素材里找不到、却出现在文章里"的具体数字/版本号/日期/标准号，按编造处理。
 - 只在文章与素材明显矛盾、或文章内部前后数据不一致时才扣"事实纪律"以外的分。
 
-## 评分标准（满分 10 分）
+## 评分标准（满分 9 分，由你打）
 只评估文章的质量维度。**违规不在这里扣分** —— 违规写进 violations，由系统单独处理。
 1. **信息密度**（3分）：内容是否充实，有没有空洞或注水
 2. **可读性**（3分）：表达是否流畅、像人话，有没有吸引力；是否有可验证的具体数字/事件，而不是抽象判断
 3. **结构完整性**（2分）：开头/正文/结尾是否完整，逻辑是否通顺；是否在结尾出现强行总结或鸡汤式升华
-4. **平台适配度**（2分）：语气、字数、格式是否符合目标平台风格
+4. **平台适配度**（1分）：语气、字数、格式是否符合目标平台风格
+
+## 第 5 项：图文一致性（1 分，不由你打分 —— 由系统按 image_placeholders 元数据确定性算）
+你**不需要**为这一项打分，也不写入 score。但请在输出 JSON 里填一个
+`image_alignment` 字段，把你**能够直接观察**的客观情况写进去（用于后续扩展 LLM judge；当前版本系统主要靠自己算）：
+- `missing_role_count`: 缺 (role: ...) 自注的占位符个数（你看 draft 直接数即可）
+- `hero_count`: role=hero 的占位符个数
+- `visual_topic_mismatch`: 占位符紧邻段落讨论的主题与占位符视觉元素明显冲突的占位符 placeholder 列表（无法判断时空数组）
+- `ungrounded_screenshots`: 截图所在段落没有「据 XX / 官方文档 / 官网」等语义引用短语的 SCREENSHOT placeholder 列表（无法判断时空数组）
 
 ## 违规判定（写入 violations，不要影响上面的 score）
 逐条对照，**只列确实触发的**，quote 必须是逐字摘录的原文：
@@ -52,7 +63,8 @@ CRITIC_SYSTEM = """你是一位资深内容编辑，负责评估文章质量并�
 **以上三类的判定范围以上面列出的条目为准。** 不在条目里的表达——即便你觉得不够好、偏主观、或者"读起来有点像"——都不要写成违规。每条违规记录都会被自动核验，不属实的会被丢弃。
 
 ## 放行条件
-- 总分达到 8 分（含 8 分）即视为通过。
+- 总分 = 你打的 4 项分（满分 9） + 系统算的图文一致性 1 分（满分 1）= 满分 10。
+- 总分达到 7.5 分（含 7.5 分）即视为通过。
 - 语言纪律 / 事实纪律 / 证据纪律命中时，系统按各自上限封顶（5 / 4 / 6 分）。**你不需要自己算封顶，也不要因此调整 score。**
 
 {writing_principles}
@@ -60,7 +72,7 @@ CRITIC_SYSTEM = """你是一位资深内容编辑，负责评估文章质量并�
 ## 输出格式
 严格输出以下 JSON，不要输出任何其他内容：
 ```json
-{{"score": <1到10的整数>, "violations": [{{"rule": "<语言纪律|事实纪律|证据纪律>", "quote": "<触发规则的原文片段>"}}], "feedback": "<具体的修改建议，100字以内>", "action": "<rewrite|research>"}}
+{{"score": <1到9的整数>, "violations": [{{"rule": "<语言纪律|事实纪律|证据纪律>", "quote": "<触发规则的原文片段>"}}], "feedback": "<具体的修改建议，100字以内>", "action": "<rewrite|research>", "image_alignment": {{"missing_role_count": <int>, "hero_count": <int>, "visual_topic_mismatch": [<placeholder 字符串>], "ungrounded_screenshots": [<placeholder 字符串>]}}}}
 ```
 
 violations 的填写要求：
@@ -184,7 +196,9 @@ def critic_node(state: AgentState) -> dict:
         violations = parsed.get("violations") or []
         action = sanitize_retry_action(parsed.get("action"))
 
-    score = max(1, min(10, score))
+    # LLM 打 4 项分满分 9（信息密度 3 / 可读性 3 / 结构 2 / 平台适配度 1）。
+    # 总分 = LLM 9 分 + 系统算的图文一致性 1 分 = 10 分制；pass 阈值 7.5。
+    score = max(1, min(9, score))
 
     # 违规判定逐条校验，封顶由代码算——不依赖模型自查规则。
     # 实测 critic 会把"我的判断是""测试的是…还是…"这类正常表达判成语言纪律
@@ -203,6 +217,15 @@ def critic_node(state: AgentState) -> dict:
     if hit_rules:
         print(f"  [Critic] 采信硬闸 {hit_rules} —— {score} → {capped}")
     score = capped
+
+    # 图文一致性 1 分（narrative_design 改动 3）：按 image_placeholders + article_type
+    # 确定性算，不依赖 LLM judge —— 老文章（缺元数据）默认给满分，避免误伤。
+    alignment_score, alignment_log = compute_image_alignment_score(state)
+    score = score + alignment_score
+    if alignment_log:
+        print(f"  [Critic] 图文一致性：{alignment_score}/1（{alignment_log}）")
+    else:
+        print(f"  [Critic] 图文一致性：{alignment_score}/1（无元数据，按满分计入）")
 
     print(f"  评分：{score}/10")
     if feedback:

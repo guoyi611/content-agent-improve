@@ -38,11 +38,12 @@ def should_retry(state: AgentState) -> str:
     score = state.get("critic_score", 7)
     retry_count = state.get("retry_count", 0)
 
-    if score < 8 and retry_count < 2:
-        print(f"\n⚠️  评分 {score}/10，未过 8 分线，准备第 {retry_count + 2} 次重写...")
+    # narrative_design 改动 3：pass 阈值 8 → 7.5（图文一致性 1 分按 0.5 颗粒算）
+    if score < 7.5 and retry_count < 2:
+        print(f"\n⚠️  评分 {score}/10，未过 7.5 分线，准备第 {retry_count + 2} 次重写...")
         return "retry"
     else:
-        if score >= 8:
+        if score >= 7.5:
             print(f"\n✅ 评分 {score}/10，质量达标，进入配图阶段")
             return "pass"
         # 2026-09-23: retry 上限到达仍 <8 分时不再静默放行——低分稿
@@ -141,7 +142,7 @@ def score_requirement_failed(state: AgentState) -> dict:
     return {
         "final_article": "",
         "log": state.get("log", []) + [
-            f"质量门槛未通过：critic 评分 {score}/10，已达最大重试次数仍未超过 8 分。已停止交付，避免低分稿进草稿箱。"
+            f"质量门槛未通过：critic 评分 {score}/10，已达最大重试次数仍未超过 7.5 分。已停止交付，避免低分稿进草稿箱。"
         ],
     }
 
@@ -300,7 +301,7 @@ def run_stream(topic: str, platform: Platform, direction: str = "tech", image_st
             # 计算当前正在运行的节点（下一个节点）
             if node_name == "critic":
                 score = node_output.get("critic_score", 7)
-                if score < 8 and retry_count < 2:
+                if score < 7.5 and retry_count < 2:
                     active = "researcher"
                 else:
                     active = "paraphraser"

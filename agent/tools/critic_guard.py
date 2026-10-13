@@ -167,3 +167,108 @@ def apply_caps(base_score: int, violations: list[dict]) -> tuple[int, list[str]]
     if not caps:
         return base_score, []
     return min(base_score, min(caps)), rules
+
+
+# ── 图文一致性（narrative_design 改动 3）──────────────────────────────────
+# 1 分项的扣分逻辑全部按 state 元数据确定性算，不依赖 LLM judge；老文章缺元数据
+# 时按满分计入（避免新规则误伤历史文章）。
+
+# 语义引用短语：截图所在段落必须含有此类短语，否则算"未语义引用"
+_SEMANTIC_CITATION_HINT = re.compile(
+    r"据[^，。；\n]{0,24}|官方(?:文档|网站|页面|资料)|官网"
+    r"|根据[^，。；\n]{0,24}|引自|来源[:：]"
+)
+
+_VALID_ROLES = frozenset({"hero", "evidence", "contrast", "transition", "decorative"})
+
+
+def _section_around_placeholder(draft: str, placeholder: dict) -> str:
+    """取占位符所在 heading 段（该 heading 起到下一个 heading 之间）的正文。"""
+    char_offset = placeholder.get("char_offset")
+    if char_offset is None:
+        return ""
+    # char_offset 钳制到 draft 长度内（避免占位符元数据漂移导致空 section 漏判）
+    char_offset = max(0, min(char_offset, len(draft)))
+    # 找下一个 ## 标题起点
+    next_h = draft.find("\n## ", char_offset + 1)
+    if next_h < 0:
+        next_h = len(draft)
+    section = draft[char_offset:next_h]
+    return section
+
+
+def _compute_image_alignment_details(state: dict) -> tuple[int, list[str]]:
+    """根据 state 计算图文一致性 1 分项的扣分明细，返回 (扣分, 日志明细列表)。"""
+    placeholders = state.get("image_placeholders") or []
+    article_type = state.get("article_type")
+    draft = state.get("draft", "") or ""
+
+    if not placeholders:
+        # 老文章 / 解析失败 → 不扣分（保守计满分）
+        return 0, []
+
+    penalty = 0.0
+    logs: list[str] = []
+
+    # 缺 role 自注：-0.2/张，最多 -1
+    missing_role = sum(1 for p in placeholders if p.get("role") in (None, "", "unassigned"))
+    if missing_role:
+        d = min(missing_role * 0.2, 1.0)
+        penalty += d
+        logs.append(f"缺 role 自注 {missing_role} 张 -{d:.1f}")
+
+    # hero 数量 ≠ 1：-0.5
+    hero_count = sum(1 for p in placeholders if p.get("role") == "hero")
+    if hero_count != 1:
+        penalty += 0.5
+        logs.append(f"hero={hero_count}≠1 -0.5")
+
+    # 引用截图所在段落缺语义引用短语：-0.2/张，最多 -1
+    ungrounded = 0
+    for p in placeholders:
+        if p.get("kind") != "screenshot":
+            continue
+        section = _section_around_placeholder(draft, p)
+        if section and not _SEMANTIC_CITATION_HINT.search(section):
+            ungrounded += 1
+    if ungrounded:
+        d = min(ungrounded * 0.2, 1.0)
+        penalty += d
+        logs.append(f"未语义引用 {ungrounded} 张 -{d:.1f}")
+
+    # A4 路由一致性（核心）：consulting 文章出现 IMAGE 占位符且无 SCREENSHOT：-0.5
+    # creative 文章全部 SCREENSHOT（无 IMAGE）：-0.5
+    kinds = {p.get("kind") for p in placeholders}
+    has_image = "image" in kinds
+    has_screenshot = "screenshot" in kinds
+    if article_type == "consulting" and has_image and not has_screenshot:
+        penalty += 0.5
+        logs.append("consulting 文章全 AI 生图 -0.5（A4）")
+    elif article_type == "creative" and has_screenshot and not has_image:
+        penalty += 0.5
+        logs.append("creative 文章全截图 -0.5（A4）")
+
+    penalty = min(penalty, 1.0)  # 维度上限 1 分
+    return penalty, logs
+
+
+def compute_image_alignment_score(state: dict) -> tuple[float, str]:
+    """计算图文一致性 1 分项的最终得分（满分 1.0，0.5 颗粒），并返回扣分日志。
+
+    return: (alignment_score, log_text)  ——  log_text 为空表示按满分计入。
+
+    颗粒度（与 critic pass 阈值 ≥ 7.5 对齐）：
+      penalty == 0                    → 1.0
+      0   < penalty ≤ 0.2            → 1.0  （轻微扣分不丢分）
+      0.2 < penalty ≤ 0.5            → 0.5
+      0.5 < penalty                  → 0.0
+    """
+    penalty, logs = _compute_image_alignment_details(state)
+    if penalty <= 0.2:
+        score = 1.0
+    elif penalty <= 0.5:
+        score = 0.5
+    else:
+        score = 0.0
+    log_text = "；".join(logs)
+    return score, log_text
