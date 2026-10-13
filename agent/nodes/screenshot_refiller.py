@@ -168,6 +168,44 @@ def _discover_candidates(
     return []
 
 
+def _pick_refill_insert_points(
+    draft: str,
+    image_placeholders: list[dict] | None,
+    need: int,
+) -> list[int]:
+    """改动 4 (narrative_design)：按 state 元数据找未覆盖 heading 补图。
+
+    旧行为：补图时无脑塞前 N 个 ``##`` heading，图片全堆到文章开头 —— 1500 字
+    公众号配 3 张图时三张全在第一屏。新行为：先看 ``image_placeholders`` 里
+    已有占位符覆盖了哪些 heading，剩下的 heading 按出现顺序挑 ``need`` 个
+    插入点；全部覆盖时返回空，调用方会把多余候选追加到文末。
+
+    缺元数据（老文章 / planner 旧版本）→ 降级到前 N 个 heading 旧行为。
+    已被 ``_drop_unanchored_screenshots`` 删除的占位符不算覆盖（按字符串
+    是否仍存在于 draft 判断）。
+    """
+    if need <= 0:
+        return []
+    headings = list(re.finditer(r"(?m)^##\s+.+$", draft))
+    if not headings:
+        return []
+    if not image_placeholders:
+        # 降级：缺元数据 → 前 N 个 heading（保留旧行为，不破坏老文章）
+        return [h.end() for h in headings[:need]]
+    covered = {
+        p["heading"] for p in image_placeholders
+        if p.get("heading") and p.get("placeholder") in draft
+    }
+    points: list[int] = []
+    for h in headings:
+        if h.group(0).strip() in covered:
+            continue
+        points.append(h.end())
+        if len(points) >= need:
+            break
+    return points
+
+
 def _top_up_shortfall(state: AgentState, draft: str, retry_number: int) -> dict:
     """No failed placeholders left but captures still below the minimum.
 
@@ -216,11 +254,12 @@ def _top_up_shortfall(state: AgentState, draft: str, retry_number: int) -> dict:
             ],
         }
 
-    # 插入位置：优先分散到各 ## 小节标题之后（图片跟着对应内容走），
-    # 小节数不够时多余的追加到文末。倒序插入使前面的偏移量保持有效。
+    # 插入位置：按 image_placeholders 元数据找未覆盖 ## heading（改动 4）。
+    # 缺元数据时 helper 内部降级到前 N 个 heading（保留旧行为）。
     additions = [f"[SCREENSHOT: {url}, {title}]" for url, title in picks]
-    headings = list(re.finditer(r"(?m)^## .+$", draft))
-    insert_points = [h.end() for h in headings[:len(additions)]]
+    insert_points = _pick_refill_insert_points(
+        draft, state.get("image_placeholders"), len(additions)
+    )
     refilled_draft = draft
     for insert_at, snippet in sorted(zip(insert_points, additions), reverse=True):
         refilled_draft = (

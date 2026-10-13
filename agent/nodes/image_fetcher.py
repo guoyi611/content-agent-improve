@@ -359,7 +359,19 @@ def image_fetcher_node(state: AgentState) -> dict:
                 logs.append(f"📋 配图提示词：{kw}")
                 print(f"  📋 配图提示词：{kw}")
         else:
-            if source == "unsplash":
+            # 改动 4 (narrative_design)：consulting 文章不应配 AI 生图。
+            # writer 仍输出 IMAGE 占位符（走错 prompt 分支）时，强制走
+            # Unsplash 兜底并记录告警，方便观察 writer prompt 误用情况。
+            article_type = state.get("article_type")
+            if article_type == "consulting":
+                warning = (
+                    f"⚠️ 咨询类文章出现 {len(unique)} 个 IMAGE 占位符"
+                    "（writer 走错分支），强制走 Unsplash 兜底"
+                )
+                logs.append(warning)
+                print(f"  {warning}")
+                fetch_fn = _fetch_unsplash
+            elif source == "unsplash":
                 fetch_fn = _fetch_unsplash
                 print("  图片来源：Unsplash")
             else:
