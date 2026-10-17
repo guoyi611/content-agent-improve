@@ -158,6 +158,10 @@ PLATFORM_PROMPTS: dict[str, str] = {
 {context}
 """,
 
+    # 2026-10-17: 小红书模板此前与 critic 规则三处不对称（与下方 ZH_DISCIPLINE
+    # 注释记录的 emoji 问题同类）：①缺 EVIDENCE_DISCIPLINE，writer 不知道要标
+    # 来源，critic 却按证据纪律硬闸封顶；②标题示例"试了3天"在教唆虚构亲测
+    # 口吻。模板教的和 critic 罚的必须是同一套规则。
     "xiaohongshu": """{direction}
 
 请根据下方素材，写一篇关于「{topic}」的小红书笔记。
@@ -166,21 +170,22 @@ PLATFORM_PROMPTS: dict[str, str] = {
 - 口语化 + 有具体信息
 - 25字以内
 - 好的标题举例：
-  · "试了3天这个工具，效率直接翻倍"
+  · "看完一圈实测帖，这个工具到底靠不靠谱"
   · "别再用XX了！这个方案碾压级好用"
 - 禁止用：赶紧收藏、建议码住、太全了
+- "实测"只能指代他人的公开实测（如"实测帖"）；素材里没有亲测记录时，禁止写"我试了/我实测"
 
 【结构要求】
 1. 开门见山：第一句话直接说结论或最惊人的信息
 2. 3~5个核心要点，每个要点具体（有功能、效果、数据）
-3. 一句真实感受 + 一个互动问题
+3. 一句真实感受 + 一个互动问题（感受只能基于素材下判断；没有亲测素材时写"我的判断是"，不写"我试了/我实测"）
 
 【格式要求】
 - 字数：400~600字
 - 段落之间空一行
 - 结尾另起一行，6~8个 #标签
 {image_instructions}
-""" + WRITING_PRINCIPLES + ZH_DISCIPLINE + """
+""" + WRITING_PRINCIPLES + EVIDENCE_DISCIPLINE + ZH_DISCIPLINE + """
 【素材】
 {context}
 """,
