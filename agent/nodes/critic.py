@@ -22,6 +22,57 @@ def _title_evidence_violation(topic: str, context: str, draft: str) -> str:
     return ""
 
 
+def _extract_score_json(text: str) -> dict | None:
+    """增量扫描出第一个合法且含 score 字段的 JSON 对象，找不到返回 None。
+
+    替代贪婪正则 \\{.*\\}：后者从全文第一个 { 匹配到最后一个 }，模型在
+    JSON 前后写叙述（叙述里只要含花括号）就会匹配出一段非法文本。这里
+    从每个 { 起点 raw_decode 增量尝试，天然免疫前后缀垃圾和多重块。
+    """
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(text):
+        if ch != "{":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(text, i)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and "score" in obj:
+            return obj
+    return None
+
+
+def _parse_critique_output(raw: str) -> tuple[dict, str]:
+    """剥围栏、补缺失前缀、扫描出评分 JSON。失败抛 ValueError。"""
+    text = raw.strip()
+    # 剥 ```...``` 围栏
+    if text.startswith("```"):
+        lines = text.split("\n")
+        if len(lines) >= 2 and lines[-1].strip().startswith("```"):
+            text = "\n".join(lines[1:-1]).strip()
+        elif len(lines) >= 1:
+            text = "\n".join(lines[1:]).strip()
+
+    # 2026-09-18: 本地网关对 GPT-5.6 relay 的流式转换会吃掉响应开头的 `{"`
+    # （首 chunk 缺首字节，实测稳定复现：{"hello":"world"} → hello":"world"}）。
+    # 把缺失的开头补回去。
+    if text.startswith('score"'):
+        text = '{"' + text
+
+    parsed = _extract_score_json(text)
+    if parsed is None:
+        raise ValueError("no score JSON found")
+
+    # 引文 quote 限长 50 字，避免超长引文冲垮下游；
+    # 非 dict 项原样保留，由 validate_violations 按格式不符驳回
+    if isinstance(parsed.get("violations"), list):
+        parsed["violations"] = [
+            {**v, "quote": str(v.get("quote", ""))[:50]} if isinstance(v, dict) else v
+            for v in parsed["violations"]
+        ]
+    return parsed, text
+
+
 CRITIC_SYSTEM = """你是一位资深内容编辑，负责评估文章质量并给出改进建议。
 
 ## 重要前提
@@ -128,56 +179,36 @@ def critic_node(state: AgentState) -> dict:
         draft=state["draft"],
     )
 
-    def _parse(raw: str) -> tuple:
-        """剥围栏、解析 JSON。成功返回 (parsed_dict, raw)；失败抛出异常。"""
-        # 剥 ```...``` 围栏
-        text = raw.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            if len(lines) >= 2 and lines[-1].strip().startswith("```"):
-                text = "\n".join(lines[1:-1]).strip()
-            elif len(lines) >= 1:
-                text = "\n".join(lines[1:]).strip()
+    # violations 默认空，确保 fallback 路径（两次尝试都失败）走到校验段不炸
+    violations: list = []
 
-        # 2026-09-18: 本地网关对 GPT-5.6 relay 的流式转换会吃掉响应开头的 `{"`
-        # （首 chunk 缺首字节，实测稳定复现：{"hello":"world"} → hello":"world"}）。
-        # 把缺失的开头补回去。
-        if text.startswith('score"'):
-            text = '{"' + text
-
-        json_match = re.search(r"\{.*\}", text, re.DOTALL)
-        if not json_match:
-            raise ValueError("no JSON found")
-        parsed = json.loads(json_match.group())
-
-        # 引文 quote 限长 50 字，避免超长引文冲垮下游
-        if "violations" in parsed and isinstance(parsed["violations"], list):
-            parsed["violations"] = [
-                {**v, "quote": str(v.get("quote", ""))[:50]}
-                for v in parsed["violations"]
-            ]
-        return parsed, text
-
-    # 解析失败最多重试一次
-    try:
-        parsed, raw_used = _parse(res.content.strip())
-    except Exception:
-        print(f"  [Critic] 首轮解析失败，重试...")
+    # 2026-10-16: 原实现在首次 _parse 前从未调用 LLM（res 未定义即被引用），
+    # "首轮解析失败" 每次必现且是 UnboundLocalError——真正的 LLM 调用一直
+    # 发生在 except 分支里，解析失败时没有第二次机会。现在先正常调用，
+    # 解析失败打原始输出并补一次请求；鲁棒解析器让补请求成为罕见路径。
+    parsed = None
+    res = get_llm().invoke([
+        SystemMessage(content=system),
+        HumanMessage(content=user),
+    ])
+    for attempt in (1, 2):
         try:
-            res = get_llm().invoke([
-                SystemMessage(content=system),
-                HumanMessage(content=user),
-            ])
-            parsed, raw_used = _parse(res.content.strip())
+            parsed, _ = _parse_critique_output(res.content.strip())
+            break
         except Exception:
-            parsed = None
-            raw_used = ""
+            # 每次失败都打原始输出，失败模式一轮日志内可见——不再双败才打
+            print(f"  [Critic] 第 {attempt} 次解析失败，原始输出前200字：{res.content.strip()[:200]}")
+            if attempt == 1:
+                print("  [Critic] 重新请求一次...")
+                res = get_llm().invoke([
+                    SystemMessage(content=system),
+                    HumanMessage(content=user),
+                ])
 
     if parsed is None:
         score = 3
         feedback = "评分输出无法解析，按不通过处理"
         action = "research"
-        print(f"  [Critic] 原始输出前200字：{raw_used[:200]}")
     else:
         score = int(parsed.get("score", 3))
         feedback = str(parsed.get("feedback", ""))
@@ -194,6 +225,13 @@ def critic_node(state: AgentState) -> dict:
     accepted, rejected = validate_violations(
         violations, state.get("draft", ""), state.get("context", "")
     )
+    # 采信的违规必须打印——这是压分的实际依据；只打驳回项会让
+    # "采信硬闸 X → N 分" 无从解释，排障时看不到踩法
+    for item in accepted:
+        print(
+            f"  [Critic] 采信违规（{item.get('rule', '')}）："
+            f"{item.get('quote', '')[:40]}"
+        )
     for item in rejected:
         print(
             f"  [Critic] 驳回误判（{item.get('why', '')}）："
