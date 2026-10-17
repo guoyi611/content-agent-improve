@@ -111,13 +111,18 @@ def _unwrap_fence(text: str) -> str:
 
 
 def _check_safe(original: str, candidate: str) -> tuple[bool, str]:
-    """改写结果的行数与长度都必须贴近原文，否则视为模型跑偏。"""
+    """改写结果的行数与长度都必须贴近原文，否则视为模型跑偏。
+
+    prompt 仍要求逐行一致，但实测 MiniMax 等模型稳定差 1~2 行（多/少一个
+    空行）。严格相等会让清洗几乎每轮都回退原文、形同虚设，因此放宽到
+    漂移 ≤3 行：轻微合并/拆分段落不影响 markdown 结构，改写保留。
+    """
     if not candidate.strip():
         return False, "结果为空"
     original_lines = original.split("\n")
     candidate_lines = candidate.split("\n")
-    if len(original_lines) != len(candidate_lines):
-        return False, f"行数不一致 {len(original_lines)}→{len(candidate_lines)}"
+    if abs(len(original_lines) - len(candidate_lines)) > 3:
+        return False, f"行数漂移过大 {len(original_lines)}→{len(candidate_lines)}"
     ratio = len(candidate) / max(len(original), 1)
     if ratio < 0.75 or ratio > 1.25:
         return False, f"长度变化过大 {ratio:.0%}"

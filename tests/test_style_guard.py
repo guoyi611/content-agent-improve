@@ -57,8 +57,18 @@ class SafetyCheckTests(unittest.TestCase):
         ok, reason = _check_safe(original, candidate)
         self.assertTrue(ok, reason)
 
+    def test_accepts_small_line_drift(self):
+        # 模型实测稳定差 1~2 行（多/少一个空行），漂移 ≤3 行应放行。
+        # 用例构造需保持总长度贴近，否则会撞上长度校验而非行数校验。
+        original = "\n".join(["甲乙丙丁" for _ in range(8)])
+        candidate = "\n".join(["甲乙丙丁戊" for _ in range(6)])
+        ok, reason = _check_safe(original, candidate)
+        self.assertTrue(ok, reason)
+
     def test_rejects_line_count_change(self):
-        ok, reason = _check_safe("第一行\n第二行", "只剩一行了")
+        original = "\n".join(["一行内容若干字" for _ in range(8)])
+        candidate = "\n".join(["一行内容若干字" for _ in range(3)])
+        ok, reason = _check_safe(original, candidate)
         self.assertFalse(ok)
         self.assertIn("行数", reason)
 
